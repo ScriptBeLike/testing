@@ -115,12 +115,33 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, serverTimestamp, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Constants
-        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'mp-testing-v2';
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        /** * IMPORTANT FOR GITHUB: 
+         * When publishing to GitHub, replace the config below with your own 
+         * from the Firebase Console (Settings > Project Settings).
+         */
+        const MANUAL_CONFIG = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const firebaseConfig = typeof window.__firebase_config !== 'undefined' 
+            ? JSON.parse(window.__firebase_config) 
+            : MANUAL_CONFIG;
+
+        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'standalone-mp-test';
+        
+        let app, auth, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.error("Firebase Init Failed. Did you set your MANUAL_CONFIG?", e);
+        }
 
         // State
         let user = null;
@@ -147,8 +168,8 @@
         const canvas = document.getElementById('game-canvas');
         const ctx = canvas.getContext('2d');
 
-        // Init Auth (MANDATORY RULE 3)
         async function initAuth() {
+            if (!auth) return;
             try {
                 if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
                     await signInWithCustomToken(auth, window.__initial_auth_token);
@@ -157,43 +178,31 @@
                 }
             } catch (e) {
                 console.error("Auth error", e);
-                statusMsg.innerText = "Auth Error: Check console";
+                statusMsg.innerText = "Check Firebase Config / Auth Settings";
             }
         }
         initAuth();
 
         onAuthStateChanged(auth, (u) => {
             user = u;
-            if (u) console.log("Authenticated as:", u.uid);
         });
 
-        // Networking Logic
         async function startSession(lobbyName) {
-            if (!user) {
-                statusMsg.innerText = "Waiting for authentication...";
+            if (!db || !user) {
+                statusMsg.innerText = "Database or Auth not ready.";
                 return;
             }
             const name = usernameInput.value.trim();
-            if (!name) {
-                statusMsg.innerText = "Please enter a name";
-                statusMsg.className = "text-center text-sm font-medium text-red-500";
-                return;
-            }
-            if (!lobbyName) {
-                statusMsg.innerText = "Please enter a lobby ID";
-                statusMsg.className = "text-center text-sm font-medium text-red-500";
+            if (!name || !lobbyName) {
+                statusMsg.innerText = "Name and Lobby ID required";
                 return;
             }
 
             statusMsg.innerText = "Joining...";
-            statusMsg.className = "text-center text-sm font-medium text-blue-500";
-
             currentLobby = lobbyName.toLowerCase().replace(/[^a-z0-9]/g, '_');
             localPlayer.name = name;
 
             try {
-                // RULE 1 COMPLIANCE: /artifacts/{appId}/public/data/{collectionName}/{docId}
-                // We merge the lobby ID into the collection name to keep the path length even (6 segments)
                 const playerRef = doc(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_players`, user.uid);
                 
                 await setDoc(playerRef, {
@@ -204,26 +213,19 @@
                     lastSeen: serverTimestamp()
                 });
 
-                // Listen for Players
-                const playersCol = collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_players`);
-                onSnapshot(playersCol, (snapshot) => {
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_players`), (snapshot) => {
                     snapshot.docChanges().forEach(change => {
                         if (change.type === "removed") delete players[change.doc.id];
                         else if (change.doc.id !== user.uid) players[change.doc.id] = change.doc.data();
                     });
                     document.getElementById('display-count').innerText = Object.keys(players).length + 1;
-                }, (err) => {
-                    statusMsg.innerText = "Connection Error. Retrying...";
-                    console.error(err);
                 });
 
-                // Listen for Chat
-                const chatCol = collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_messages`);
-                onSnapshot(chatCol, (snapshot) => {
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_messages`), (snapshot) => {
                     snapshot.docChanges().forEach(change => {
                         if (change.type === "added") addChatMessage(change.doc.data());
                     });
-                }, (err) => console.error(err));
+                });
 
                 setupScreen.classList.add('hidden');
                 gameUI.classList.remove('hidden');
@@ -234,6 +236,7 @@
 
             } catch (err) {
                 statusMsg.innerText = "Error: " + err.message;
+                console.error(err);
             }
         }
 
@@ -251,8 +254,7 @@
             const text = chatInput.value.trim();
             if (!text || !currentLobby || !user) return;
             chatInput.value = "";
-            const chatCol = collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_messages`);
-            await addDoc(chatCol, { 
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_messages`), { 
                 sender: localPlayer.name, 
                 text, 
                 timestamp: serverTimestamp() 
@@ -261,17 +263,10 @@
 
         function addChatMessage(data) {
             const msgEl = document.createElement('div');
-            msgEl.className = "animate-in fade-in slide-in-from-bottom-2 duration-300";
-            msgEl.innerHTML = `
-                <div class="flex flex-col">
-                    <span class="text-[10px] font-bold text-slate-400 uppercase">${data.sender}</span>
-                    <span class="text-slate-700">${data.text}</span>
-                </div>
-            `;
+            msgEl.innerHTML = `<div class="flex flex-col"><span class="text-[10px] font-bold text-slate-400 uppercase">${data.sender}</span><span class="text-slate-700">${data.text}</span></div>`;
             chatBox.prepend(msgEl);
         }
 
-        // Engine
         function gameLoop() {
             const speed = 5;
             if (keys['ArrowUp'] || keys['KeyW']) localPlayer.y -= speed;
@@ -284,14 +279,10 @@
             document.getElementById('display-pos').innerText = `${Math.round(localPlayer.x)}, ${Math.round(localPlayer.y)}`;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // Grid
             ctx.strokeStyle = '#f1f5f9';
-            ctx.lineWidth = 1;
             for(let i=0; i<canvas.width; i+=80) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i, canvas.height); ctx.stroke(); }
             for(let i=0; i<canvas.height; i+=80) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
 
-            // Draw
             Object.values(players).forEach(p => drawPlayer(p.x, p.y, p.color, p.name, false));
             drawPlayer(localPlayer.x, localPlayer.y, localPlayer.color, localPlayer.name, true);
 
@@ -300,48 +291,24 @@
 
         function drawPlayer(x, y, color, name, isLocal) {
             ctx.beginPath();
-            ctx.ellipse(x, y + 12, 12, 5, 0, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(0,0,0,0.05)";
-            ctx.fill();
-
-            ctx.beginPath();
             ctx.arc(x, y, 14, 0, Math.PI * 2);
             ctx.fillStyle = color;
             ctx.fill();
-            
-            if (isLocal) {
-                ctx.strokeStyle = "#3b82f6";
-                ctx.lineWidth = 3;
-                ctx.stroke();
-            }
-
+            if (isLocal) { ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 3; ctx.stroke(); }
             ctx.fillStyle = "#475569";
             ctx.font = "bold 11px Inter, sans-serif";
             ctx.textAlign = "center";
             ctx.fillText(name, x, y - 24);
         }
 
-        // Events
         window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
-
         window.addEventListener('keydown', e => keys[e.code] = true);
         window.addEventListener('keyup', e => keys[e.code] = false);
         chatInput.addEventListener('keypress', e => e.key === 'Enter' && sendChat());
         joinBtn.addEventListener('click', () => startSession(lobbyInput.value));
-        createBtn.addEventListener('click', () => {
-            const id = Math.random().toString(36).substring(2, 8);
-            startSession(id);
-        });
-
-        window.addEventListener('beforeunload', () => {
-            if (user && currentLobby) {
-                const playerRef = doc(db, 'artifacts', appId, 'public', 'data', `lobby_${currentLobby}_players`, user.uid);
-                deleteDoc(playerRef);
-            }
-        });
-
+        createBtn.addEventListener('click', () => startSession(Math.random().toString(36).substring(2, 8)));
     </script>
 </body>
 </html>
