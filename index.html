@@ -60,7 +60,7 @@
         <div class="glass-panel p-8 rounded-2xl max-w-md w-full mx-4">
             <div class="text-center mb-8">
                 <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight">MPTesting</h1>
-                <p class="text-slate-500 text-sm">Multiplayer Testing Environment</p>
+                <p class="text-slate-500 text-sm">Instant Multiplayer Environment</p>
             </div>
             
             <div class="space-y-4">
@@ -73,7 +73,7 @@
                     <div class="flex flex-col gap-2">
                         <input type="text" id="lobby-input" class="w-full" placeholder="Lobby Name / ID">
                         <div class="grid grid-cols-2 gap-2">
-                            <button id="join-btn" class="btn-primary py-2 px-4 rounded-lg font-medium">Join Lobby</button>
+                            <button id="join-btn" class="btn-primary py-2 px-4 rounded-lg font-medium">Join Game</button>
                             <button id="create-btn" class="btn-secondary py-2 px-4 rounded-lg font-medium">Create New</button>
                         </div>
                     </div>
@@ -115,22 +115,22 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, serverTimestamp, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        /** * IMPORTANT FOR GITHUB: 
-         * When publishing to GitHub, replace the config below with your own 
-         * from the Firebase Console (Settings > Project Settings).
+        /** * AUTO-CONFIG BLOCK
+         * Paste your Firebase project info here once.
+         * Then anyone who visits your GitHub link will connect automatically.
          */
-        const MANUAL_CONFIG = {
-            apiKey: "YOUR_API_KEY",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+        const GITHUB_FALLBACK_CONFIG = {
+            apiKey: "PASTE_YOUR_API_KEY_HERE",
+            authDomain: "PASTE_YOUR_PROJECT_ID_HERE.firebaseapp.com",
+            projectId: "PASTE_YOUR_PROJECT_ID_HERE",
+            storageBucket: "PASTE_YOUR_PROJECT_ID_HERE.appspot.com",
+            messagingSenderId: "PASTE_YOUR_SENDER_ID_HERE",
+            appId: "PASTE_YOUR_APP_ID_HERE"
         };
 
         const firebaseConfig = typeof window.__firebase_config !== 'undefined' 
             ? JSON.parse(window.__firebase_config) 
-            : MANUAL_CONFIG;
+            : GITHUB_FALLBACK_CONFIG;
 
         const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'standalone-mp-test';
         
@@ -140,7 +140,7 @@
             auth = getAuth(app);
             db = getFirestore(app);
         } catch (e) {
-            console.error("Firebase Init Failed. Did you set your MANUAL_CONFIG?", e);
+            console.error("Firebase Init Failed.", e);
         }
 
         // State
@@ -150,7 +150,7 @@
         const localPlayer = {
             x: window.innerWidth / 2,
             y: window.innerHeight / 2,
-            name: "User",
+            name: localStorage.getItem('mp_test_name') || "",
             color: `hsl(${Math.random() * 360}, 65%, 55%)`
         };
         const keys = {};
@@ -168,6 +168,15 @@
         const canvas = document.getElementById('game-canvas');
         const ctx = canvas.getContext('2d');
 
+        // Fill saved name
+        usernameInput.value = localPlayer.name;
+
+        // Auto-fill lobby from URL if present (e.g., ?lobby=main)
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('lobby')) {
+            lobbyInput.value = urlParams.get('lobby');
+        }
+
         async function initAuth() {
             if (!auth) return;
             try {
@@ -178,27 +187,35 @@
                 }
             } catch (e) {
                 console.error("Auth error", e);
-                statusMsg.innerText = "Check Firebase Config / Auth Settings";
+                statusMsg.innerText = "Connection failed. Check Firebase console.";
             }
         }
         initAuth();
 
         onAuthStateChanged(auth, (u) => {
             user = u;
+            if (u && usernameInput.value && lobbyInput.value && urlParams.has('auto')) {
+                startSession(lobbyInput.value);
+            }
         });
 
         async function startSession(lobbyName) {
             if (!db || !user) {
-                statusMsg.innerText = "Database or Auth not ready.";
+                statusMsg.innerText = "Connecting to server...";
                 return;
             }
             const name = usernameInput.value.trim();
             if (!name || !lobbyName) {
-                statusMsg.innerText = "Name and Lobby ID required";
+                statusMsg.innerText = "Name and Lobby required";
+                statusMsg.className = "text-center text-sm font-medium text-red-500";
                 return;
             }
 
+            // Save name for next time
+            localStorage.setItem('mp_test_name', name);
+
             statusMsg.innerText = "Joining...";
+            statusMsg.className = "text-center text-sm font-medium text-blue-500";
             currentLobby = lobbyName.toLowerCase().replace(/[^a-z0-9]/g, '_');
             localPlayer.name = name;
 
@@ -263,6 +280,7 @@
 
         function addChatMessage(data) {
             const msgEl = document.createElement('div');
+            msgEl.className = "animate-in fade-in slide-in-from-bottom-1 duration-200";
             msgEl.innerHTML = `<div class="flex flex-col"><span class="text-[10px] font-bold text-slate-400 uppercase">${data.sender}</span><span class="text-slate-700">${data.text}</span></div>`;
             chatBox.prepend(msgEl);
         }
